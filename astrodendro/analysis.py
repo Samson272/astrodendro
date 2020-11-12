@@ -17,7 +17,9 @@ from .structure import Structure
 from .flux import UnitMetadataWarning
 from .progressbar import AnimatedProgressBar
 
-__all__ = ['ppv_catalog', 'pp_catalog']
+#from streamlit import caching
+
+__all__ = ['ppv_catalog', 'pp_catalog', 'ppp_catalog']
 
 
 def memoize(func):
@@ -30,6 +32,7 @@ def memoize(func):
     @wraps(func)
     def wrapper(self, *args):
         try:
+            #caching.clear_cache()
             return cache[self][args]
         except KeyError:
             cache.setdefault(self, {})[args] = func(self, *args)
@@ -374,6 +377,54 @@ class SpatialBase(object):
                        angle=self.position_angle.value,
                        **kwargs)
 
+    @property
+    def a_sigma(self):
+        """
+        Ellispoidal semi-principal axis 'a' in the position-position-position
+        (PPP) volume, computed from the intensity weighted second moment
+        in direction of greatest elongation in the PPP volume.
+        """
+        dx = self.spatial_scale or u.pixel
+        a, b, c = self._sky_axes()
+        # We need to multiply the second moment by two to get the major axis
+        # rather than the half-major axis.
+        return dx * np.sqrt(self.stat.mom2_along(a))
+
+    @property
+    def b_sigma(self):
+        """
+        Ellispoidal semi-principal axis 'b' in the position-position-position
+        (PPP) volume, computed from the intensity weighted second moment
+        in direction of second largest elongation in the PPP volume.
+        """
+        dx = self.spatial_scale or u.pixel
+        a, b, c = self._sky_axes()
+        # We need to multiply the second moment by two to get the minor axis
+        # rather than the half-minor axis.
+        return dx * np.sqrt(self.stat.mom2_along(b))
+
+    @property
+    def c_sigma(self):
+        """
+        Ellispoidal semi-principal axis 'c' in the position-position-position
+        (PPP) volume, computed from the intensity weighted second moment
+        in direction of smallest elongation in the PPP volume.
+        """
+        dx = self.spatial_scale or u.pixel
+        a, b, c = self._sky_axes()
+        # We need to multiply the second moment by two to get the minor axis
+        # rather than the half-minor axis.
+        return dx * np.sqrt(self.stat.mom2_along(c))
+
+    @property
+    def volume_ellipsoid(self):
+        """
+        The volume of the ellipsoid defined by the second moments, where the
+        principal axes used are the HWHM (half-width at
+        half-maximum) derived from the moments.
+        """
+        return 4. / 3 * np.pi * self.a_sigma * self.b_sigma * self.c_sigma #* (2.3548 * 0.5) ** 3
+
 
 class PPVStatistic(SpatialBase):
 
@@ -393,6 +444,7 @@ class PPVStatistic(SpatialBase):
     vaxis = Metadata('vaxis', 'Index of velocity axis (numpy convention)', default=0)
 
     def __init__(self, stat, metadata=None):
+        print(stat)
         if isinstance(stat, Structure):
             self.stat = ScalarStatistic(stat.values(subtree=True),
                                         stat.indices(subtree=True))
@@ -412,6 +464,14 @@ class PPVStatistic(SpatialBase):
         b = list(b)
         b.insert(0, vaxis)
         return tuple(a), tuple(b)
+
+    def _sky_axes(self):
+        ax = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        a, b, c = self.stat.projected_paxes(ax)
+        a = list(a)
+        b = list(b)
+        c = list(c)
+        return a, b, c
 
     @property
     def x_cen(self):
@@ -488,6 +548,54 @@ class PPVStatistic(SpatialBase):
         dx = self.spatial_scale or u.pixel
         indices = zip(*tuple(self.stat.indices[i] for i in range(3) if i != self.vaxis))
         return len(set(indices)) * dx ** 2
+
+    @property
+    def a_sigma(self):
+        """
+        Ellispoidal semi-principal axis 'a' in the position-position-position
+        (PPP) volume, computed from the intensity weighted second moment
+        in direction of greatest elongation in the PPP volume.
+        """
+        dx = self.spatial_scale or u.pixel
+        a, b, c = self._sky_axes()
+        # We need to multiply the second moment by two to get the major axis
+        # rather than the half-major axis.
+        return dx * np.sqrt(self.stat.mom2_along(a))
+
+    @property
+    def b_sigma(self):
+        """
+        Ellispoidal semi-principal axis 'b' in the position-position-position
+        (PPP) volume, computed from the intensity weighted second moment
+        in direction of second largest elongation in the PPP volume.
+        """
+        dx = self.spatial_scale or u.pixel
+        a, b, c = self._sky_axes()
+        # We need to multiply the second moment by two to get the minor axis
+        # rather than the half-minor axis.
+        return dx * np.sqrt(self.stat.mom2_along(b))
+
+    @property
+    def c_sigma(self):
+        """
+        Ellispoidal semi-principal axis 'c' in the position-position-position
+        (PPP) volume, computed from the intensity weighted second moment
+        in direction of smallest elongation in the PPP volume.
+        """
+        dx = self.spatial_scale or u.pixel
+        a, b, c = self._sky_axes()
+        # We need to multiply the second moment by two to get the minor axis
+        # rather than the half-minor axis.
+        return dx * np.sqrt(self.stat.mom2_along(c))
+
+    @property
+    def volume_ellipsoid(self):
+        """
+        The volume of the ellipsoid defined by the second moments, where the
+        principal axes used are the HWHM (half-width at
+        half-maximum) derived from the moments.
+        """
+        return 4. / 3 * np.pi * self.a_sigma * self.b_sigma * self.c_sigma #* (2.3548 * 0.5) ** 3
 
 
 class PPStatistic(SpatialBase):
@@ -567,52 +675,209 @@ class PPStatistic(SpatialBase):
         return self.stat.count() * dx ** 2
 
 
-class PPPStatistic(object):
+class VolumeBase(object):
 
-    def __init__(self, rhostat, vstat, metadata=None):
-        """
-        Derive properties from PPP density and velocity fields.
+    __metaclass__ = abc.ABCMeta
 
-        This is not currently implemented
+    spatial_scale = MetadataQuantity('spatial_scale', 'Pixel width/height')
+    data_unit = MetadataQuantity('data_unit', 'Units of the pixel values', strict=True)
 
-        Parameters
-        ----------
-        rhostat : ScalarStatistic instance
-        vstat : VectorStatistic instance
-        """
+    @abc.abstractmethod
+    def _sky_axes(self):
+        raise NotImplementedError()
+
+    def _world_pos(self):
+        xyz = self.stat.mom1()[::-1]
+        return xyz[::-1] * u.pixel
+
+
+    @abc.abstractproperty
+    def mass(self):
+        raise NotImplementedError
+
+    @abc.abstractproperty
+    def x_cen(self):
+        raise NotImplementedError()
+
+    @abc.abstractproperty
+    def y_cen(self):
+        raise NotImplementedError()
+
+    @abc.abstractproperty
+    def z_cen(self):
+        raise NotImplementedError()
+
+    @abc.abstractproperty
+    def azimuth(self):
+        raise NotImplementedError()
+
+    @abc.abstractproperty
+    def elevation(self):
         raise NotImplementedError()
 
     @property
-    def mass(self):
-        pass
+    def a_sigma(self):
+        """
+        Ellispoidal semi-principal axis 'a' in the position-position-position
+        (PPP) volume, computed from the intensity weighted second moment
+        in direction of greatest elongation in the PPP volume.
+        """
+        dx = self.spatial_scale or u.pixel
+        a, b, c = self._sky_axes()
+        # We need to multiply the second moment by two to get the major axis
+        # rather than the half-major axis.
+        return dx * np.sqrt(self.stat.mom2_along(a))
 
     @property
-    def volume(self):
-        pass
+    def b_sigma(self):
+        """
+        Ellispoidal semi-principal axis 'b' in the position-position-position
+        (PPP) volume, computed from the intensity weighted second moment
+        in direction of second largest elongation in the PPP volume.
+        """
+        dx = self.spatial_scale or u.pixel
+        a, b, c = self._sky_axes()
+        # We need to multiply the second moment by two to get the minor axis
+        # rather than the half-minor axis.
+        return dx * np.sqrt(self.stat.mom2_along(b))
+
+
+    @property
+    def c_sigma(self):
+        """
+        Ellispoidal semi-principal axis 'c' in the position-position-position
+        (PPP) volume, computed from the intensity weighted second moment
+        in direction of smallest elongation in the PPP volume.
+        """
+        dx = self.spatial_scale or u.pixel
+        a, b, c = self._sky_axes()
+        # We need to multiply the second moment by two to get the minor axis
+        # rather than the half-minor axis.
+        return dx * np.sqrt(self.stat.mom2_along(c))
+
+    @property
+    def volume_ellipsoid(self):
+        """
+        The volume of the ellipsoid defined by the second moments, where the
+        principal axes used are the HWHM (half-width at
+        half-maximum) derived from the moments.
+        """
+        return 4./3 * np.pi * self.a_sigma * self.b_sigma * self.c_sigma * (2.3548 * 0.5) ** 3
+
+
+class PPPStatistic(SpatialBase):
+
+    def __init__(self, stat, metadata=None):
+        """
+        Derive properties from PPP density.
+        Parameters
+        ----------
+        stat : ScalarStatistic instance
+        """
+        if isinstance(stat, Structure):
+            self.stat = ScalarStatistic(stat.values(subtree=True),
+                                        stat.indices(subtree=True))
+        else:
+            self.stat = stat
+        if len(self.stat.indices) != 3:
+            raise ValueError("PPPStatistic can only be used on 3-d datasets")
+        self.metadata = metadata or {}
+
+    def _sky_axes(self):
+        ax = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        a, b, c = self.stat.projected_paxes(ax)
+        a = list(a)
+        b = list(b)
+        c = list(c)
+        return a, b, c
+
+
+    @property
+    def peak_density(self):
+        """
+        Maximum density in original units.
+        """
+        return np.nanmax(self.stat.values) * self.data_unit
+
+    @property
+    def mass(self):
+        from .mass import compute_mass
+        return compute_mass(self.stat.mom0() * self.data_unit,
+                            u.Msun,
+                            spatial_scale=self.spatial_scale)
+
+    @property
+    def volume_exact(self):
+        """
+        The exact volume of the structure in PPP.
+        """
+        dx = self.spatial_scale or u.pixel
+        return self.stat.count() * dx**3
+
+    @property
+    def radius(self):
+        """
+        Equivalent radius of the sphere occupying the same volume
+        of the structure.
+        """
+        return (3. * self.volume_exact / (4. * np.pi))**(1./3)
 
     @property
     def surface_area(self):
-        pass
+        """
+        Equivalent area of the circle using the equivalent
+        radius estimated in PPP.
+        """
+        return np.pi * self.radius ** 2
 
     @property
-    def virial(self):
-        pass
+    def surface_density(self):
+        """
+        Surface_density over the equivalent area.
+        """
+        return self.mass / self.surface_area
 
     @property
-    def v_rms(self):
-        pass
+    def azimuth(self):
+        """
+        The position angle of a_axis in degrees counter-clockwise
+        from the +y axis.
+        """
+        a, b, c = self._sky_axes()
+        return np.degrees(np.arctan2(a[1], a[2])) * u.degree
 
     @property
-    def vz_rms(self):
-        pass
+    def elevation(self):
+        """
+        The position angle of a_axis in degrees clockwise
+        from the +z axis.
+        """
+        a, b, c = self._sky_axes()
+        return np.degrees(np.arccos(a[0]/np.linalg.norm(a))) * u.degree
 
     @property
-    def pressure_vz(self):
-        pass
+    def x_cen(self):
+        """
+        The mean position of the structure in the x direction (in pixel
+        coordinates).
+        """
+        return self._world_pos()[2]
 
     @property
-    def pressure(self):
-        pass
+    def y_cen(self):
+        """
+        The mean position of the structure in the y direction (in pixel
+        coordinates).
+        """
+        return self._world_pos()[1]
+
+    @property
+    def z_cen(self):
+        """
+        The mean position of the structure in the z direction (in pixel
+        coordinates).
+        """
+        return self._world_pos()[0]
 
 
 def _make_catalog(structures, fields, metadata, statistic, verbose=False):
@@ -720,11 +985,13 @@ def ppv_catalog(structures, metadata, fields=None, verbose=True):
         The resulting catalog
     """
     fields = fields or ['major_sigma', 'minor_sigma', 'radius', 'area_ellipse', 'area_exact',
-                        'position_angle', 'v_rms', 'x_cen', 'y_cen', 'v_cen', 'flux']
+                        'position_angle', 'v_rms', 'x_cen', 'y_cen', 'v_cen', 'flux', 'a_sigma', 'b_sigma',
+                        'c_sigma', 'volume_ellipsoid']
+
 
     with warnings.catch_warnings():
         warnings.simplefilter("once" if verbose else 'ignore', category=MissingMetadataWarning)
-        warnings.simplefilter("once" if verbose else 'ignore', category=UnitMetadataWarning)        
+        warnings.simplefilter("once" if verbose else 'ignore', category=UnitMetadataWarning)
         return _make_catalog(structures, fields, metadata, PPVStatistic, verbose)
 
 
@@ -756,3 +1023,33 @@ def pp_catalog(structures, metadata, fields=None, verbose=True):
     with warnings.catch_warnings():
         warnings.simplefilter("once" if verbose else 'ignore', category=MissingMetadataWarning)
         return _make_catalog(structures, fields, metadata, PPStatistic, verbose)
+
+def ppp_catalog(structures, metadata, fields=None, verbose=True):
+    """
+    Iterate over a collection of position-position-position (PPP) structures,
+    extracting several quantities from each, and building a catalog.
+    Parameters
+    ----------
+    structures : iterable of Structures
+         The structures to catalog (e.g., a dendrogram)
+    metadata : dict
+        The metadata used to compute the catalog
+    fields : list of strings, optional
+        The quantities to extract. If not provided,
+        defaults to all PPP statistics
+    verbose : bool, optional
+        If True (the default), will generate warnings
+        about missing metadata
+    Returns
+    -------
+    table : a :class:`~astropy.table.table.Table` instance
+        The resulting catalog
+    """
+    fields = fields or ['a_sigma', 'b_sigma', 'c_sigma', 'radius', 'volume_ellipsoid', 'volume_exact',
+                        'surface_area', 'surface_density', 'azimuth', 'elevation',
+                        'x_cen', 'y_cen', 'z_cen', 'mass', 'peak_density']
+    with warnings.catch_warnings():
+        warnings.simplefilter("once" if verbose else 'ignore', category=MissingMetadataWarning)
+        warnings.simplefilter("once" if verbose else 'ignore', category=UnitMetadataWarning)
+        return _make_catalog(structures, fields, metadata, PPPStatistic, verbose)
+
